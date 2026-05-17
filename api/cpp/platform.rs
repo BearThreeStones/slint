@@ -896,15 +896,32 @@ pub mod skia {
     ) -> SkiaRendererOpaque {
         let handle = unsafe { &*(handle_opaque as *const CppRawHandle) };
 
-        let boxed_renderer: Box<SkiaRenderer> = Box::new(
-            SkiaRenderer::new(
-                &i_slint_renderer_skia::SkiaSharedContext::default(),
-                handle.0.clone(),
-                handle.0.clone(),
-                PhysicalSize { width: size.width, height: size.height },
-            )
-            .unwrap(),
+        let context = i_slint_renderer_skia::SkiaSharedContext::default();
+        let physical_size =
+            PhysicalSize { width: size.width, height: size.height };
+
+        #[cfg(target_family = "windows")]
+        let renderer = {
+            let renderer = SkiaRenderer::default_direct3d(&context);
+            renderer
+                .set_window_handle(
+                    handle.0.clone(),
+                    handle.0.clone(),
+                    physical_size,
+                    None,
+                )
+                .map(|_| renderer)
+        };
+
+        #[cfg(not(target_family = "windows"))]
+        let renderer = SkiaRenderer::new(
+            &context,
+            handle.0.clone(),
+            handle.0.clone(),
+            physical_size,
         );
+
+        let boxed_renderer: Box<SkiaRenderer> = Box::new(renderer.unwrap());
         Box::into_raw(boxed_renderer) as SkiaRendererOpaque
     }
 
