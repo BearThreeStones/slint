@@ -785,12 +785,17 @@ pub mod skia {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slint_new_raw_window_handle_win32(
         hwnd: *mut c_void,
-        _hinstance: *mut c_void,
+        hinstance: *mut c_void,
     ) -> CppRawHandleOpaque {
+        let hwnd = (hwnd as isize)
+            .try_into()
+            .expect("C++: NativeWindowHandle created with null hwnd");
+        let mut win32 = raw_window_handle::Win32WindowHandle::new(hwnd);
+        if let Some(hinst) = core::num::NonZeroIsize::new(hinstance as isize) {
+            win32.hinstance = Some(hinst);
+        }
         let handle = CppRawHandle::from((
-            RawWindowHandle::Win32(raw_window_handle::Win32WindowHandle::new(
-                (hwnd as isize).try_into().expect("C++: NativeWindowHandle created with null hwnd"),
-            )),
+            RawWindowHandle::Win32(win32),
             RawDisplayHandle::Windows(raw_window_handle::WindowsDisplayHandle::new()),
         ));
         Box::into_raw(Box::new(handle)) as CppRawHandleOpaque

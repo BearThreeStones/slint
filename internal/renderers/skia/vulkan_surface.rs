@@ -498,7 +498,8 @@ fn create_surface(
             }),
             _,
         ) => unsafe {
-            Surface::from_win32(instance.clone(), hinstance.unwrap().get(), hwnd.get(), None)
+            let hinst = hinstance.map(|h| h.get()).unwrap_or(0);
+            Surface::from_win32(instance.clone(), hinst, hwnd.get(), None)
         },
         _ => unimplemented!(),
     }
