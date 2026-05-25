@@ -9,6 +9,7 @@ platform integration (SDL3 `HWND`, headless engine Vulkan, Slint UI composite).
 | Area | Summary |
 |------|---------|
 | C++ `slint_skia_renderer_new` | Windows uses `SkiaRenderer::default_direct3d()` + `set_window_handle()` instead of `SkiaRenderer::new()` (Vulkan WSI). Avoids a second Vulkan swapchain on the SDL window. |
+| C++ `slint_skia_renderer_resize` | Exposes `SkiaRenderer::resize()` so Blunder can resize the D3D12 swap chain on maximize without destroying/recreating the renderer (avoids abort on first `render()` after recreate). |
 | C++ `slint_new_raw_window_handle_win32` | Forward `hinstance` into `Win32WindowHandle` (upstream ignored the parameter). |
 | Skia `VulkanSurface` | Use `hinstance` when present, else `0` for `Surface::from_win32` (no panic on `None`). |
 

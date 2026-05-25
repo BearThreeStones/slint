@@ -995,6 +995,12 @@ public:
 
     /// Renders the scene into the window provided to the SkiaRenderer's constructor.
     void render() const { cbindgen_private::slint_skia_renderer_render(inner); }
+
+    /// Resizes the underlying GPU surface (e.g. D3D12 swap chain) without recreating the renderer.
+    void resize(PhysicalSize size) const
+    {
+        cbindgen_private::slint_skia_renderer_resize(inner, size);
+    }
 };
 #endif
 

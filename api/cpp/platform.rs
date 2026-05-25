@@ -745,6 +745,7 @@ mod software_renderer {
 #[cfg(all(feature = "i-slint-renderer-skia", feature = "raw-window-handle"))]
 pub mod skia {
     use super::*;
+    use i_slint_core::renderer::RendererSealed;
     use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
     use std::sync::Arc;
 
@@ -934,6 +935,19 @@ pub mod skia {
     pub unsafe extern "C" fn slint_skia_renderer_render(r: SkiaRendererOpaque) {
         let r = unsafe { &*(r as *const SkiaRenderer) };
         r.render().unwrap();
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slint_skia_renderer_resize(r: SkiaRendererOpaque, size: IntSize) {
+        let r = unsafe { &*(r as *const SkiaRenderer) };
+        let physical_size =
+            PhysicalSize { width: size.width, height: size.height };
+        if let Err(err) = r.resize(physical_size) {
+            i_slint_core::debug_log!(
+                "slint_skia_renderer_resize failed: {}",
+                err
+            );
+        }
     }
 
     #[unsafe(no_mangle)]
