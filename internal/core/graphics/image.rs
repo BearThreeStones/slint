@@ -347,6 +347,8 @@ impl ImageCacheKey {
             ImageInner::NineSlice(nine) => vtable::VRc::borrow(nine).cache_key(),
             #[cfg(any(feature = "unstable-wgpu-27", feature = "unstable-wgpu-28"))]
             ImageInner::WGPUTexture(..) => return None,
+            #[cfg(not(target_arch = "wasm32"))]
+            ImageInner::BorrowedVulkanTexture(..) => return None,
         };
         if matches!(key, ImageCacheKey::Invalid) { None } else { Some(key) }
     }
@@ -435,6 +437,9 @@ pub enum ImageInner {
     NineSlice(vtable::VRc<OpaqueImageVTable, NineSliceImage>) = 7,
     #[cfg(any(feature = "unstable-wgpu-27", feature = "unstable-wgpu-28"))]
     WGPUTexture(WGPUTexture) = 8,
+    /// Blunder: a borrowed `VkImage` for the shared-device zero-copy viewport.
+    #[cfg(not(target_arch = "wasm32"))]
+    BorrowedVulkanTexture(BorrowedVulkanTexture) = 9,
 }
 
 impl ImageInner {
@@ -554,6 +559,8 @@ impl ImageInner {
             ImageInner::NineSlice(nine) => nine.0.size(),
             #[cfg(any(feature = "unstable-wgpu-27", feature = "unstable-wgpu-28"))]
             ImageInner::WGPUTexture(texture) => texture.size(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ImageInner::BorrowedVulkanTexture(BorrowedVulkanTexture { size, .. }) => *size,
         }
     }
 }
@@ -573,6 +580,8 @@ impl PartialEq for ImageInner {
             (Self::BackendStorage(l0), Self::BackendStorage(r0)) => vtable::VRc::ptr_eq(l0, r0),
             #[cfg(not(target_arch = "wasm32"))]
             (Self::BorrowedOpenGLTexture(l0), Self::BorrowedOpenGLTexture(r0)) => l0 == r0,
+            #[cfg(not(target_arch = "wasm32"))]
+            (Self::BorrowedVulkanTexture(l0), Self::BorrowedVulkanTexture(r0)) => l0 == r0,
             (Self::NineSlice(l), Self::NineSlice(r)) => l.0 == r.0 && l.1 == r.1,
             _ => false,
         }
@@ -1464,6 +1473,28 @@ pub struct BorrowedOpenGLTexture {
     /// The id or name of the texture, as created by [`glGenTextures`](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGenTextures.xhtml).
     pub texture_id: core::num::NonZeroU32,
     /// The size of the texture in pixels.
+    pub size: IntSize,
+    /// Origin of the texture when rendering.
+    pub origin: BorrowedOpenGLTextureOrigin,
+}
+
+/// Blunder: a borrowed Vulkan image (`VkImage`) owned by the embedding
+/// application. Only valid for the Skia Vulkan renderer running on the *same*
+/// `VkDevice` the image was created on (the engine's shared-device path). The
+/// application keeps ownership of the image and must keep it alive (and in the
+/// declared layout) while it is assigned as an `Image` source.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[cfg(not(target_arch = "wasm32"))]
+#[repr(C)]
+pub struct BorrowedVulkanTexture {
+    /// The raw `VkImage` handle (reinterpreted to `u64`).
+    pub image: u64,
+    /// The `VkFormat` of the image (as its raw `i32`/`u32` value).
+    pub format: u32,
+    /// The `VkImageLayout` the image is in when sampled (raw value).
+    pub image_layout: u32,
+    /// The size of the image in pixels.
     pub size: IntSize,
     /// Origin of the texture when rendering.
     pub origin: BorrowedOpenGLTextureOrigin,

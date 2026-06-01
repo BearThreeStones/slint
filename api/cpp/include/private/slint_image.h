@@ -171,6 +171,31 @@ public:
         );
     }
 
+    /// Blunder: constructs an Image from a borrowed Vulkan image (`VkImage`).
+    /// Only valid for the Skia Vulkan renderer running on the *same* `VkDevice`
+    /// the image was created on (the engine's shared-device, zero-copy viewport
+    /// path). \a image is the raw `VkImage` handle, \a format the `VkFormat`,
+    /// \a image_layout the `VkImageLayout` the image is sampled in. The
+    /// application keeps ownership and must keep the image alive while it is
+    /// assigned as an `Image` source.
+    [[nodiscard]] static Image create_from_borrowed_vulkan_texture(
+            uint64_t image, uint32_t format, uint32_t image_layout, Size<uint32_t> size,
+            BorrowedOpenGLTextureOrigin origin = BorrowedOpenGLTextureOrigin::TopLeft)
+    {
+        cbindgen_private::types::BorrowedOpenGLTextureOrigin origin_private =
+                origin == BorrowedOpenGLTextureOrigin::TopLeft
+                ? cbindgen_private::types::BorrowedOpenGLTextureOrigin::TopLeft
+                : cbindgen_private::types::BorrowedOpenGLTextureOrigin::BottomLeft;
+        return Image(Data::ImageInner_BorrowedVulkanTexture(
+                cbindgen_private::types::BorrowedVulkanTexture {
+                        image,
+                        format,
+                        image_layout,
+                        size,
+                        origin_private,
+                }));
+    }
+
     /// Construct an image from a SharedPixelBuffer of RGB pixels.
     Image(SharedPixelBuffer<Rgb8Pixel> buffer)
         : data(Data::ImageInner_EmbeddedImage(

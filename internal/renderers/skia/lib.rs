@@ -488,6 +488,40 @@ impl SkiaRenderer {
         }
     }
 
+    #[cfg(skia_backend_vulkan)]
+    /// Blunder: creates a renderer that composites into `window_handle` using a
+    /// Vulkan device **owned by the embedding engine**. The engine passes its raw
+    /// `VkInstance`/`VkPhysicalDevice`/`VkDevice` handles plus the graphics-queue
+    /// family index; the resulting surface borrows them (engine keeps ownership).
+    /// This is the shared-device path that enables a zero-copy 3D viewport.
+    pub fn new_vulkan_shared(
+        context: &SkiaSharedContext,
+        window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Send + Sync>,
+        display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Send + Sync>,
+        size: PhysicalWindowSize,
+        instance_handle: u64,
+        physical_device_handle: u64,
+        device_handle: u64,
+        queue_family_index: u32,
+    ) -> Result<Self, PlatformError> {
+        let window = window_handle.window_handle().map_err(|e| {
+            format!("error obtaining window handle for shared vulkan renderer: {e}")
+        })?;
+        let display = display_handle.display_handle().map_err(|e| {
+            format!("error obtaining display handle for shared vulkan renderer: {e}")
+        })?;
+        let surface = vulkan_surface::VulkanSurface::from_shared_handles(
+            instance_handle,
+            physical_device_handle,
+            device_handle,
+            queue_family_index,
+            window,
+            display,
+            size,
+        )?;
+        Ok(Self::new_with_surface(context, Box::new(surface) as Box<dyn Surface>))
+    }
+
     /// Reset the surface to a new surface. (destroy the previously set surface if any)
     pub fn set_surface(&self, surface: Box<dyn Surface + 'static>) {
         self.image_cache.clear_all();
@@ -1087,6 +1121,16 @@ pub trait Surface {
         &self,
         _canvas: &skia_safe::Canvas,
         _texture: &i_slint_core::graphics::BorrowedOpenGLTexture,
+    ) -> Option<skia_safe::Image> {
+        None
+    }
+
+    /// Blunder: imports a borrowed `VkImage` as a Skia image. Only the Vulkan
+    /// surface (running on the same shared `VkDevice`) implements this.
+    fn import_vulkan_texture(
+        &self,
+        _canvas: &skia_safe::Canvas,
+        _texture: &i_slint_core::graphics::BorrowedVulkanTexture,
     ) -> Option<skia_safe::Image> {
         None
     }

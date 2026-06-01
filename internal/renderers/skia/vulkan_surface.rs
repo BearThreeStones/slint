@@ -10,7 +10,7 @@ use i_slint_core::partial_renderer::DirtyRegion;
 
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{
-    Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
 };
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageUsage};
@@ -115,6 +115,18 @@ impl VulkanSurface {
         .map_err(|dev_err| format!("Failed to create suitable logical Vulkan device: {dev_err}"))?;
         let queue = queues.next().ok_or_else(|| "Not Vulkan device queue found".to_string())?;
 
+        Self::from_device_queue_surface(device, queue, surface, size)
+    }
+
+    /// Blunder: builds the Skia Vulkan swapchain + context on an already-created
+    /// logical `device`/`queue`. Shared by the self-owned (`from_surface`) and
+    /// the engine-owned (`from_shared_handles`) device paths.
+    fn from_device_queue_surface(
+        device: Arc<Device>,
+        queue: Arc<Queue>,
+        surface: Arc<Surface>,
+        size: PhysicalWindowSize,
+    ) -> Result<Self, i_slint_core::platform::PlatformError> {
         let (swapchain, swapchain_images) = {
             let surface_capabilities = device
                 .physical_device()
@@ -152,17 +164,21 @@ impl VulkanSurface {
             })?);
         }
 
-        let instance = physical_device.instance();
-        let library = instance.library();
+        let physical_device = device.physical_device().clone();
+        let instance = physical_device.instance().clone();
+        let library = instance.library().clone();
 
         let get_proc = |of| unsafe {
             let result = match of {
-                skia_safe::gpu::vk::GetProcOf::Instance(instance, name) => {
-                    library.get_instance_proc_addr(ash::vk::Instance::from_raw(instance as _), name)
+                skia_safe::gpu::vk::GetProcOf::Instance(instance_handle, name) => {
+                    library.get_instance_proc_addr(
+                        ash::vk::Instance::from_raw(instance_handle as _),
+                        name,
+                    )
                 }
-                skia_safe::gpu::vk::GetProcOf::Device(device, name) => {
+                skia_safe::gpu::vk::GetProcOf::Device(device_handle, name) => {
                     (instance.fns().v1_0.get_device_proc_addr)(
-                        ash::vk::Device::from_raw(device as _),
+                        ash::vk::Device::from_raw(device_handle as _),
                         name,
                     )
                 }
@@ -177,18 +193,31 @@ impl VulkanSurface {
             }
         };
 
+        // NOTE: Skia's `fGraphicsQueueIndex` is the queue *family* index, not the
+        // index within the family. vulkano's `Queue::queue_index()` is the latter
+        // (== 0 for the engine's single queue), so we must pass
+        // `queue_family_index()` here. Using queue_index() only happens to work
+        // when the graphics family is family 0.
         let backend_context = unsafe {
             skia_safe::gpu::vk::BackendContext::new(
                 instance.handle().as_raw() as _,
                 physical_device.handle().as_raw() as _,
                 device.handle().as_raw() as _,
-                (queue.handle().as_raw() as _, queue.queue_index() as _),
+                (queue.handle().as_raw() as _, queue.queue_family_index() as _),
                 &get_proc,
             )
         };
 
+        // NOTE: make_vulkan() fails when the Vulkan validation layer is enabled
+        // on this (externally-created) instance/device. The embedding app should
+        // disable validation to use the shared device (the caller falls back to a
+        // self-owned device otherwise).
         let gr_context = skia_safe::gpu::direct_contexts::make_vulkan(&backend_context, None)
-            .ok_or_else(|| "Error creating Skia Vulkan context".to_string())?;
+            .ok_or_else(|| {
+                "Error creating Skia Vulkan context on the shared device \
+                 (is the Vulkan validation layer enabled?)"
+                    .to_string()
+            })?;
 
         let previous_frame_end = RefCell::new(Some(sync::now(device.clone()).boxed()));
 
@@ -202,6 +231,95 @@ impl VulkanSurface {
             swapchain_images: RefCell::new(swapchain_images),
             swapchain_image_views: RefCell::new(swapchain_image_views),
         })
+    }
+
+    /// Blunder: wraps the engine's existing Vulkan handles (instance, physical
+    /// device, logical device, graphics-queue family) into vulkano objects via
+    /// `from_handle`, then builds the Skia Vulkan swapchain surface on that
+    /// shared device. The engine retains ownership of the Vulkan objects, so
+    /// this surface (and the owning `SkiaRenderer`) must be dropped before the
+    /// engine destroys the device. The features/extensions declared here must
+    /// match what the engine created the device with (see `VulkanContext`).
+    pub fn from_shared_handles(
+        instance_handle: u64,
+        physical_device_handle: u64,
+        device_handle: u64,
+        queue_family_index: u32,
+        window_handle: raw_window_handle::WindowHandle<'_>,
+        display_handle: raw_window_handle::DisplayHandle<'_>,
+        size: PhysicalWindowSize,
+    ) -> Result<Self, i_slint_core::platform::PlatformError> {
+        let library = vulkano::VulkanLibrary::new()
+            .map_err(|load_err| format!("Error loading vulkan library: {load_err}"))?;
+
+        // Adopt the engine's VkInstance. The surface extensions must be declared
+        // so vulkano permits creating a window surface from this instance.
+        let instance = unsafe {
+            Instance::from_handle(
+                library,
+                ash::vk::Instance::from_raw(instance_handle),
+                InstanceCreateInfo {
+                    enabled_extensions: InstanceExtensions {
+                        khr_surface: true,
+                        khr_win32_surface: true,
+                        khr_get_physical_device_properties2: true,
+                        khr_get_surface_capabilities2: true,
+                        ..InstanceExtensions::empty()
+                    },
+                    ..Default::default()
+                },
+            )
+        };
+
+        let physical_device = unsafe {
+            PhysicalDevice::from_handle(
+                instance.clone(),
+                ash::vk::PhysicalDevice::from_raw(physical_device_handle),
+            )
+        }
+        .map_err(|vke| format!("Error adopting shared Vulkan physical device: {vke}"))?;
+
+        // Adopt the engine's VkDevice and retrieve a handle to the shared queue.
+        let (device, mut queues) = unsafe {
+            Device::from_handle(
+                physical_device,
+                ash::vk::Device::from_raw(device_handle),
+                DeviceCreateInfo {
+                    queue_create_infos: vec![QueueCreateInfo {
+                        queue_family_index,
+                        ..Default::default()
+                    }],
+                    enabled_extensions: DeviceExtensions {
+                        khr_swapchain: true,
+                        ..DeviceExtensions::empty()
+                    },
+                    enabled_features: DeviceFeatures {
+                        shader_draw_parameters: true,
+                        sampler_anisotropy: true,
+                        geometry_shader: true,
+                        ..DeviceFeatures::empty()
+                    },
+                    ..Default::default()
+                },
+            )
+        };
+        let queue =
+            queues.next().ok_or_else(|| "No queue from shared Vulkan device".to_string())?;
+
+        // The embedding engine owns the VkInstance and VkDevice. vulkano's
+        // `from_handle` wrappers would otherwise call vkDestroyInstance /
+        // vkDestroyDevice when dropped, double-freeing the engine's objects (and
+        // tearing down the device mid-init on any failure). Leak one extra
+        // reference to each so vulkano never destroys them; the engine remains
+        // the sole owner and destroys them in VulkanContext::shutdown. The
+        // surface and swapchain are vulkano-owned and still drop normally.
+        std::mem::forget(instance.clone());
+        std::mem::forget(device.clone());
+
+        let surface = create_surface(&instance, window_handle, display_handle)
+            .map_err(|surface_err| format!("Error creating Vulkan surface: {surface_err}"))?;
+
+        Self::from_device_queue_surface(device, queue, surface, size)
     }
 
     /// Returns a clone of the shared swapchain.
@@ -436,6 +554,72 @@ impl super::Surface for VulkanSurface {
 
     fn as_any(&self) -> &dyn core::any::Any {
         self
+    }
+
+    /// Blunder: wraps a borrowed engine `VkImage` (shared-device path) as a Skia
+    /// image so the 3D viewport composites zero-copy (no CPU readback). The image
+    /// must live on this surface's device and be in the declared layout.
+    fn import_vulkan_texture(
+        &self,
+        canvas: &skia_safe::Canvas,
+        texture: &i_slint_core::graphics::BorrowedVulkanTexture,
+    ) -> Option<skia_safe::Image> {
+        // The engine off-screen color image is an 8-bit UNORM target sampled in
+        // SHADER_READ_ONLY layout. Map the known formats explicitly so we don't
+        // depend on the bindgen representation of VkFormat.
+        let (vk_format, color_type) = match texture.format {
+            // VK_FORMAT_R8G8B8A8_UNORM
+            37 => (
+                skia_safe::gpu::vk::Format::R8G8B8A8_UNORM,
+                skia_safe::ColorType::RGBA8888,
+            ),
+            // VK_FORMAT_B8G8R8A8_UNORM
+            44 => (
+                skia_safe::gpu::vk::Format::B8G8R8A8_UNORM,
+                skia_safe::ColorType::BGRA8888,
+            ),
+            _ => return None,
+        };
+
+        let alloc = skia_safe::gpu::vk::Alloc::default();
+        let image_info = unsafe {
+            skia_safe::gpu::vk::ImageInfo::new(
+                texture.image as _,
+                alloc,
+                skia_safe::gpu::vk::ImageTiling::OPTIMAL,
+                skia_safe::gpu::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk_format,
+                1,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+
+        let backend_texture = unsafe {
+            skia_safe::gpu::backend_textures::make_vk(
+                (texture.size.width as i32, texture.size.height as i32),
+                &image_info,
+                "Blunder viewport image",
+            )
+        };
+
+        let origin = match texture.origin {
+            i_slint_core::graphics::BorrowedOpenGLTextureOrigin::BottomLeft => {
+                skia_safe::gpu::SurfaceOrigin::BottomLeft
+            }
+            _ => skia_safe::gpu::SurfaceOrigin::TopLeft,
+        };
+
+        skia_safe::image::Image::from_texture(
+            canvas.recording_context().as_mut().unwrap(),
+            &backend_texture,
+            origin,
+            color_type,
+            skia_safe::AlphaType::Opaque,
+            None,
+        )
     }
 }
 

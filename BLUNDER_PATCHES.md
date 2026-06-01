@@ -8,10 +8,31 @@ platform integration (SDL3 `HWND`, headless engine Vulkan, Slint UI composite).
 
 | Area | Summary |
 |------|---------|
-| C++ `slint_skia_renderer_new` | Windows uses `SkiaRenderer::default_direct3d()` + `set_window_handle()` instead of `SkiaRenderer::new()` (Vulkan WSI). Avoids a second Vulkan swapchain on the SDL window. |
-| C++ `slint_skia_renderer_resize` | Exposes `SkiaRenderer::resize()` so Blunder can resize the D3D12 swap chain on maximize without destroying/recreating the renderer (avoids abort on first `render()` after recreate). |
+| C++ `slint_skia_renderer_new` | Windows now defaults to **Vulkan** composition (`SkiaRenderer::default_vulkan()`); set env `BLUNDER_SLINT_RENDERER=d3d12` to fall back to Direct3D. Enables sharing the engine's Vulkan device for a zero-copy 3D viewport. |
+| C++ `slint_skia_renderer_new_vulkan_shared` (new FFI) + `SkiaRenderer::new_vulkan_shared` | Build a Skia Vulkan renderer on a **caller-owned** `VkInstance`/`VkPhysicalDevice`/`VkDevice` + graphics queue family (the engine's headless device). |
+| Skia `VulkanSurface::from_shared_handles` | Adopt the engine's raw Vulkan handles via vulkano `from_handle`; `mem::forget` the instance/device wrappers so vulkano never destroys the engine-owned objects. Refactors `from_surface` to share `from_device_queue_surface`. |
+| Skia `Surface::import_vulkan_texture` + `VulkanSurface` impl | Wrap a borrowed engine `VkImage` (`vk::ImageInfo` + `backend_textures::make_vk` + `Image::from_texture`) so the 3D viewport composites zero-copy. Fixes `fGraphicsQueueIndex` to use the queue **family** index. |
+| core `graphics::BorrowedVulkanTexture` + `ImageInner::BorrowedVulkanTexture` | New image variant carrying a borrowed `VkImage` (handle/format/layout/size/origin); dispatched in `skia/cached_image.rs`. |
+| C++ `Image::create_from_borrowed_vulkan_texture` | C++ API to build a `slint::Image` from a borrowed `VkImage` (mirrors `create_from_borrowed_gl_2d_rgba_texture`). |
+| C++ `slint_skia_renderer_resize` | Exposes `SkiaRenderer::resize()` so Blunder can resize the swap chain on maximize without destroying/recreating the renderer. |
 | C++ `slint_new_raw_window_handle_win32` | Forward `hinstance` into `Win32WindowHandle` (upstream ignored the parameter). |
 | Skia `VulkanSurface` | Use `hinstance` when present, else `0` for `Surface::from_win32` (no panic on `None`). |
+
+## Shared-device zero-copy viewport (Blunder)
+
+The engine renders the 3D viewport into an off-screen `VkImage` and the Slint
+Skia renderer composites the editor UI. To avoid a CPU readback per frame, the
+renderer adopts the **engine's** Vulkan device (`new_vulkan_shared`) and samples
+the off-screen image directly via `BorrowedVulkanTexture` /
+`import_vulkan_texture`. The engine selects the path at runtime
+(`SlintSystem::viewportUsesSharedDevice()` ↔ `SkiaRenderer::uses_shared_vulkan()`).
+
+**Validation-layer limitation:** Skia's `make_vulkan()` fails to create a
+context on an externally-created device while the Vulkan validation layer is
+loaded, so `new_vulkan_shared` returns null and the C++ `SkiaRenderer` falls
+back to a self-owned device (CPU readback path). Release builds have validation
+off and get the shared device automatically; in debug set
+`BLUNDER_VK_VALIDATION=0` to exercise the zero-copy path.
 
 ## Upstreaming
 

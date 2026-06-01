@@ -975,6 +975,8 @@ public:
 class SkiaRenderer : public AbstractRenderer
 {
     mutable cbindgen_private::SkiaRendererOpaque inner;
+    // Blunder: true when constructed on a shared (engine-owned) Vulkan device.
+    bool m_shared_vulkan = false;
 
     /// \private
     cbindgen_private::RendererPtr renderer_handle() const override
@@ -992,6 +994,31 @@ public:
     {
         inner = cbindgen_private::slint_skia_renderer_new(window_handle.inner, initial_size);
     }
+
+    /// Blunder: constructs a Skia renderer that composites on a Vulkan device
+    /// owned by the embedding engine (shared-device path for a zero-copy 3D
+    /// viewport). \a vk_instance, \a vk_physical_device and \a vk_device are raw
+    /// `VkInstance`/`VkPhysicalDevice`/`VkDevice` handles; \a vk_queue_family is
+    /// the engine's graphics queue family index. If the shared-device path fails
+    /// it transparently falls back to the self-owned renderer.
+    SkiaRenderer(const NativeWindowHandle &window_handle, PhysicalSize initial_size,
+                 uint64_t vk_instance, uint64_t vk_physical_device, uint64_t vk_device,
+                 uint32_t vk_queue_family)
+    {
+        inner = cbindgen_private::slint_skia_renderer_new_vulkan_shared(
+                window_handle.inner, initial_size, vk_instance, vk_physical_device, vk_device,
+                vk_queue_family);
+        if (!inner) {
+            inner = cbindgen_private::slint_skia_renderer_new(window_handle.inner, initial_size);
+        } else {
+            m_shared_vulkan = true;
+        }
+    }
+
+    /// Blunder: true when this renderer composites on the engine's shared Vulkan
+    /// device (so the 3D viewport image can be presented zero-copy). False when
+    /// the shared-device path was unavailable and a self-owned device is used.
+    bool uses_shared_vulkan() const { return m_shared_vulkan; }
 
     /// Renders the scene into the window provided to the SkiaRenderer's constructor.
     void render() const { cbindgen_private::slint_skia_renderer_render(inner); }

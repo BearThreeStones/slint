@@ -903,7 +903,21 @@ pub mod skia {
 
         #[cfg(target_family = "windows")]
         let renderer = {
-            let renderer = SkiaRenderer::default_direct3d(&context);
+            // Blunder: default to the Vulkan composition backend so the UI renderer
+            // can eventually share the engine's headless Vulkan device for a
+            // zero-copy 3D viewport. Set BLUNDER_SLINT_RENDERER=d3d12 to fall back
+            // to the Direct3D backend (useful for A/B testing WSI stability).
+            let use_d3d12 = std::env::var("BLUNDER_SLINT_RENDERER")
+                .map(|v| {
+                    let v = v.trim();
+                    v.eq_ignore_ascii_case("d3d12") || v.eq_ignore_ascii_case("d3d")
+                })
+                .unwrap_or(false);
+            let renderer = if use_d3d12 {
+                SkiaRenderer::default_direct3d(&context)
+            } else {
+                SkiaRenderer::default_vulkan(&context)
+            };
             renderer
                 .set_window_handle(
                     handle.0.clone(),
@@ -924,6 +938,49 @@ pub mod skia {
 
         let boxed_renderer: Box<SkiaRenderer> = Box::new(renderer.unwrap());
         Box::into_raw(boxed_renderer) as SkiaRendererOpaque
+    }
+
+    /// Blunder: creates a Skia renderer that composites on a Vulkan device owned
+    /// by the embedding engine (shared-device path for a zero-copy 3D viewport).
+    /// `instance`/`physical_device`/`device` are raw `VkInstance`/
+    /// `VkPhysicalDevice`/`VkDevice` handles (`u64`); `queue_family_index` is the
+    /// engine's graphics queue family. Returns null on failure (caller should
+    /// fall back to `slint_skia_renderer_new`).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slint_skia_renderer_new_vulkan_shared(
+        handle_opaque: CppRawHandleOpaque,
+        size: IntSize,
+        instance: u64,
+        physical_device: u64,
+        device: u64,
+        queue_family_index: u32,
+    ) -> SkiaRendererOpaque {
+        let handle = unsafe { &*(handle_opaque as *const CppRawHandle) };
+        let context = i_slint_renderer_skia::SkiaSharedContext::default();
+        let physical_size = PhysicalSize { width: size.width, height: size.height };
+
+        match SkiaRenderer::new_vulkan_shared(
+            &context,
+            handle.0.clone(),
+            handle.0.clone(),
+            physical_size,
+            instance,
+            physical_device,
+            device,
+            queue_family_index,
+        ) {
+            Ok(renderer) => {
+                let boxed_renderer: Box<SkiaRenderer> = Box::new(renderer);
+                Box::into_raw(boxed_renderer) as SkiaRendererOpaque
+            }
+            Err(err) => {
+                i_slint_core::debug_log!(
+                    "slint_skia_renderer_new_vulkan_shared failed: {}",
+                    err
+                );
+                core::ptr::null()
+            }
+        }
     }
 
     #[unsafe(no_mangle)]

@@ -92,6 +92,10 @@ pub(crate) fn as_skia_image(
         ImageInner::BorrowedOpenGLTexture(texture) => {
             surface.and_then(|surface| surface.import_opengl_texture(canvas, texture))
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        ImageInner::BorrowedVulkanTexture(texture) => {
+            surface.and_then(|surface| surface.import_vulkan_texture(canvas, texture))
+        }
         ImageInner::NineSlice(n) => as_skia_image(
             n.image(),
             target_size_fn,
