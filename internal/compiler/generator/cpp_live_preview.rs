@@ -335,7 +335,10 @@ fn generate_public_api_for_properties(
                     statements: Some(vec![
                         "using slint::private_api::live_preview::into_slint_value;".into(),
                         format!(
-                            "live_preview.set_callback(\"{prefix}{prop_name}\", [callback_handler]([[maybe_unused]] auto args) {{ {return_statement} }});",
+                            // `mutable`: user functors (and UiCallbackBinder) may use non-const
+                            // call operators; LiveReloadingComponent::set_callback stores this
+                            // wrapper and invokes it without a const requirement on F itself.
+                            "live_preview.set_callback(\"{prefix}{prop_name}\", [callback_handler = std::forward<Functor>(callback_handler)]([[maybe_unused]] auto args) mutable {{ {return_statement} }});",
                         ),
                     ]),
                     ..Default::default()

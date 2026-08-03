@@ -1007,6 +1007,34 @@ pub mod skia {
         }
     }
 
+    /// Blunder: marks a logical rectangle dirty for the next partial Skia composite.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slint_skia_renderer_mark_dirty_region(
+        r: SkiaRendererOpaque,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
+        use i_slint_core::lengths::{LogicalPoint, LogicalRect, LogicalSize};
+        use i_slint_core::partial_renderer::DirtyRegion;
+
+        let r = unsafe { &*(r as *const SkiaRenderer) };
+        let mut region = DirtyRegion::default();
+        region.add_rect(LogicalRect::new(
+            LogicalPoint::new(x, y),
+            LogicalSize::new(width, height),
+        ));
+        r.mark_dirty_region(region);
+    }
+
+    /// Blunder: forces the next partial composite to repaint the entire window.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slint_skia_renderer_force_full_refresh(r: SkiaRendererOpaque) {
+        let r = unsafe { &*(r as *const SkiaRenderer) };
+        r.force_full_refresh();
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slint_skia_renderer_handle(r: SkiaRendererOpaque) -> RendererPtr {
         unsafe {

@@ -23,6 +23,29 @@ function(SLINT_TARGET_SOURCES target)
         endif()
     endif()
 
+    # Blunder / upstream live-preview: when SLINT_FEATURE_LIVE_PREVIEW is on,
+    # slint-compiler must see SLINT_LIVE_PREVIEW so it emits LiveReloadingComponent
+    # stubs instead of AOT C++. Keep codegen mode in sync with the runtime feature.
+    set(_slint_codegen_live_preview_desired "0")
+    if ("LIVE_PREVIEW" IN_LIST enabled_features OR SLINT_FEATURE_LIVE_PREVIEW)
+        if (NOT SLINT_COMPILER_ENV)
+            set(SLINT_COMPILER_ENV ${CMAKE_COMMAND} -E env)
+        endif()
+        set(SLINT_COMPILER_ENV ${SLINT_COMPILER_ENV} SLINT_LIVE_PREVIEW=1)
+        set(_slint_codegen_live_preview_desired "1")
+    endif()
+    set(_slint_codegen_live_preview_stamp
+        "${CMAKE_BINARY_DIR}/CMakeFiles/slint_codegen_live_preview.stamp")
+    set(_slint_codegen_live_preview_current "")
+    if (EXISTS "${_slint_codegen_live_preview_stamp}")
+        file(READ "${_slint_codegen_live_preview_stamp}" _slint_codegen_live_preview_current)
+        string(STRIP "${_slint_codegen_live_preview_current}" _slint_codegen_live_preview_current)
+    endif()
+    if (NOT _slint_codegen_live_preview_current STREQUAL _slint_codegen_live_preview_desired)
+        file(WRITE "${_slint_codegen_live_preview_stamp}"
+            "${_slint_codegen_live_preview_desired}\n")
+    endif()
+
     if (DEFINED SLINT_TARGET_SOURCES_NAMESPACE)
         # Remove the NAMESPACE argument from the list
         list(FIND ARGN "NAMESPACE" _index)
@@ -94,6 +117,7 @@ function(SLINT_TARGET_SOURCES target)
                 ${bundle_translations_arg}
                 ${cpp_files_arg}
             DEPENDS Slint::slint-compiler ${_SLINT_ABSOLUTE}
+                ${_slint_codegen_live_preview_stamp}
             COMMENT "Generating ${_SLINT_BASE_NAME}.h"
             DEPFILE ${CMAKE_CURRENT_BINARY_DIR}/${_SLINT_BASE_NAME}.d
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

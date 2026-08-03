@@ -8,6 +8,8 @@ platform integration (SDL3 `HWND`, headless engine Vulkan, Slint UI composite).
 
 | Area | Summary |
 |------|---------|
+| CMake `SlintMacro.cmake` | When `SLINT_FEATURE_LIVE_PREVIEW` is on, invoke `slint-compiler` with `SLINT_LIVE_PREVIEW=1` and stamp codegen mode so flipping the feature regenerates `.slint` stubs (Blunder editor UI hot-reload). |
+| `cpp_live_preview.rs` | Live-preview `on_*` wrappers capture the functor with `std::forward` and `mutable` so non-const call operators (common in C++ UI bindings) satisfy `set_callback`. |
 | C++ `slint_skia_renderer_new` | Windows now defaults to **Vulkan** composition (`SkiaRenderer::default_vulkan()`); set env `BLUNDER_SLINT_RENDERER=d3d12` to fall back to Direct3D. Enables sharing the engine's Vulkan device for a zero-copy 3D viewport. |
 | C++ `slint_skia_renderer_new_vulkan_shared` (new FFI) + `SkiaRenderer::new_vulkan_shared` | Build a Skia Vulkan renderer on a **caller-owned** `VkInstance`/`VkPhysicalDevice`/`VkDevice` + graphics queue family (the engine's headless device). |
 | Skia `VulkanSurface::from_shared_handles` | Adopt the engine's raw Vulkan handles via vulkano `from_handle`; `mem::forget` the instance/device wrappers so vulkano never destroys the engine-owned objects. Refactors `from_surface` to share `from_device_queue_surface`. |
@@ -15,6 +17,7 @@ platform integration (SDL3 `HWND`, headless engine Vulkan, Slint UI composite).
 | core `graphics::BorrowedVulkanTexture` + `ImageInner::BorrowedVulkanTexture` | New image variant carrying a borrowed `VkImage` (handle/format/layout/size/origin); dispatched in `skia/cached_image.rs`. |
 | C++ `Image::create_from_borrowed_vulkan_texture` | C++ API to build a `slint::Image` from a borrowed `VkImage` (mirrors `create_from_borrowed_gl_2d_rgba_texture`). |
 | C++ `slint_skia_renderer_resize` | Exposes `SkiaRenderer::resize()` so Blunder can resize the swap chain on maximize without destroying/recreating the renderer. |
+| Skia Vulkan partial composite | `VulkanSurface::use_partial_rendering()` + swapchain buffer-age tracking; C++ `SkiaRenderer::mark_dirty_region` / `force_full_refresh`. Enabled by default; set `BLUNDER_SLINT_PARTIAL=0` to disable. Debug with `SLINT_SKIA_PARTIAL_RENDERING=log`. |
 | C++ `slint_new_raw_window_handle_win32` | Forward `hinstance` into `Win32WindowHandle` (upstream ignored the parameter). |
 | Skia `VulkanSurface` | Use `hinstance` when present, else `0` for `Surface::from_win32` (no panic on `None`). |
 

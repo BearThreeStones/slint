@@ -129,15 +129,28 @@ impl Default for DirtyRegionDebugMode {
     }
 }
 
+/// Blunder: partial viewport composite is on by default; set `BLUNDER_SLINT_PARTIAL=0` to disable.
+fn blunder_partial_rendering_enabled() -> bool {
+    match std::env::var("BLUNDER_SLINT_PARTIAL").as_deref() {
+        Ok(value) => {
+            let value = value.trim();
+            !(value == "0" || value.eq_ignore_ascii_case("false"))
+        }
+        Err(_) => true,
+    }
+}
+
 fn create_partial_renderer_state(
     maybe_surface: Option<&dyn Surface>,
 ) -> Option<PartialRenderingState> {
-    maybe_surface
-        .map_or_else(
-            || std::env::var("SLINT_SKIA_PARTIAL_RENDERING").as_deref().is_ok(),
-            |surface| surface.use_partial_rendering(),
-        )
-        .then(PartialRenderingState::default)
+    let enabled = maybe_surface.map_or_else(
+        || {
+            std::env::var("SLINT_SKIA_PARTIAL_RENDERING").as_deref().is_ok()
+                || blunder_partial_rendering_enabled()
+        },
+        |surface| surface.use_partial_rendering(),
+    );
+    enabled.then(PartialRenderingState::default)
 }
 
 #[derive(Default)]
@@ -520,6 +533,18 @@ impl SkiaRenderer {
             size,
         )?;
         Ok(Self::new_with_surface(context, Box::new(surface) as Box<dyn Surface>))
+    }
+
+    /// Marks a logical rectangle dirty for the next partial Skia composite.
+    pub fn mark_dirty_region(&self, region: DirtyRegion) {
+        i_slint_core::renderer::RendererSealed::mark_dirty_region(self, region);
+    }
+
+    /// Forces the next partial composite to repaint the entire window.
+    pub fn force_full_refresh(&self) {
+        if let Some(partial_rendering_state) = self.partial_rendering_state.as_ref() {
+            partial_rendering_state.force_screen_refresh();
+        }
     }
 
     /// Reset the surface to a new surface. (destroy the previously set surface if any)

@@ -70,6 +70,17 @@ impl SharedVulkanContext {
     }
 }
 
+/// Blunder: matches [`super::blunder_partial_rendering_enabled`].
+fn blunder_partial_rendering_enabled() -> bool {
+    match std::env::var("BLUNDER_SLINT_PARTIAL").as_deref() {
+        Ok(value) => {
+            let value = value.trim();
+            !(value == "0" || value.eq_ignore_ascii_case("false"))
+        }
+        Err(_) => true,
+    }
+}
+
 /// This surface renders into the given window using Vulkan.
 pub struct VulkanSurface {
     gr_context: RefCell<skia_safe::gpu::DirectContext>,
@@ -80,6 +91,10 @@ pub struct VulkanSurface {
     swapchain: RefCell<Arc<Swapchain>>,
     swapchain_images: RefCell<Vec<Arc<Image>>>,
     swapchain_image_views: RefCell<Vec<Arc<ImageView>>>,
+    /// Monotonic frame counter for swapchain buffer-age tracking.
+    present_generation: Cell<u64>,
+    /// Last frame generation each swapchain image was presented.
+    image_last_presented: RefCell<Vec<u64>>,
 }
 
 impl VulkanSurface {
@@ -221,6 +236,7 @@ impl VulkanSurface {
 
         let previous_frame_end = RefCell::new(Some(sync::now(device.clone()).boxed()));
 
+        let image_count = swapchain_images.len();
         Ok(Self {
             gr_context: RefCell::new(gr_context),
             recreate_swapchain: Cell::new(false),
@@ -230,7 +246,28 @@ impl VulkanSurface {
             swapchain: RefCell::new(swapchain),
             swapchain_images: RefCell::new(swapchain_images),
             swapchain_image_views: RefCell::new(swapchain_image_views),
+            present_generation: Cell::new(0),
+            image_last_presented: RefCell::new(vec![0; image_count]),
         })
+    }
+
+    fn reset_swapchain_age_tracking(&self, image_count: usize) {
+        self.present_generation.set(0);
+        *self.image_last_presented.borrow_mut() = vec![0; image_count];
+    }
+
+    fn compute_back_buffer_age(&self, image_index: u32, frame_generation: u64) -> u8 {
+        let last_presented = self.image_last_presented.borrow();
+        let idx = image_index as usize;
+        if idx >= last_presented.len() {
+            return 0;
+        }
+        let last_gen = last_presented[idx];
+        if last_gen == 0 {
+            return 0;
+        }
+        let age = frame_generation.saturating_sub(last_gen);
+        if age == 0 { 0 } else { age.min(3) as u8 }
     }
 
     /// Blunder: wraps the engine's existing Vulkan handles (instance, physical
@@ -429,8 +466,10 @@ impl super::Surface for VulkanSurface {
                 )?);
             }
 
+            let image_count = new_images.len();
             *self.swapchain_images.borrow_mut() = new_images;
             *self.swapchain_image_views.borrow_mut() = new_swapchain_image_views;
+            self.reset_swapchain_age_tracking(image_count);
         }
 
         let swapchain = self.swapchain.borrow().clone();
@@ -499,7 +538,10 @@ impl super::Surface for VulkanSurface {
         )
         .ok_or_else(|| "Error creating Skia Vulkan surface".to_string())?;
 
-        callback(skia_surface.canvas(), Some(gr_context), 0);
+        let frame_generation = self.present_generation.get().saturating_add(1);
+        let back_buffer_age = self.compute_back_buffer_age(image_index, frame_generation);
+
+        callback(skia_surface.canvas(), Some(gr_context), back_buffer_age);
 
         drop(skia_surface);
 
@@ -524,6 +566,13 @@ impl super::Surface for VulkanSurface {
         #[cfg_attr(slint_nightly_test, allow(non_exhaustive_omitted_patterns))]
         match future.map_err(Validated::unwrap) {
             Ok(future) => {
+                {
+                    let mut last_presented = self.image_last_presented.borrow_mut();
+                    if (image_index as usize) < last_presented.len() {
+                        last_presented[image_index as usize] = frame_generation;
+                    }
+                }
+                self.present_generation.set(frame_generation);
                 *self.previous_frame_end.borrow_mut() = Some(future.boxed());
             }
             Err(VulkanError::OutOfDate) => {
@@ -554,6 +603,10 @@ impl super::Surface for VulkanSurface {
 
     fn as_any(&self) -> &dyn core::any::Any {
         self
+    }
+
+    fn use_partial_rendering(&self) -> bool {
+        blunder_partial_rendering_enabled()
     }
 
     /// Blunder: wraps a borrowed engine `VkImage` (shared-device path) as a Skia

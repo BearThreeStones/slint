@@ -1028,6 +1028,19 @@ public:
     {
         cbindgen_private::slint_skia_renderer_resize(inner, size);
     }
+
+    /// Blunder: marks a logical rectangle dirty for the next partial Skia composite.
+    /// Coordinates are in Slint logical pixels (same space as viewport-origin-x/y).
+    void mark_dirty_region(float x, float y, float width, float height) const
+    {
+        cbindgen_private::slint_skia_renderer_mark_dirty_region(inner, x, y, width, height);
+    }
+
+    /// Blunder: forces the next composite to repaint the entire window (resize / layout).
+    void force_full_refresh() const
+    {
+        cbindgen_private::slint_skia_renderer_force_full_refresh(inner);
+    }
 };
 #endif
 
